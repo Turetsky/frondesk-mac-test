@@ -8,8 +8,12 @@ workflows:
     scripts:
       - name: open VNC through a tunnel
         script: |
-          set -x
           sw_vers; whoami; who
+          # login password for the GUI (VNC shows the login window) + SSH for staging (throwaway key)
+          sudo dscl . -passwd /Users/builder "$VNC_PW" && echo PW_SET
+          mkdir -p ~/.ssh && echo "$SSH_PUB" >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist 2>/dev/null; sudo launchctl enable system/com.openssh.sshd; sudo launchctl kickstart system/com.openssh.sshd 2>/dev/null
+          sleep 2; nc -z 127.0.0.1 22 && echo SSH_UP
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PW" \
             -restart -agent -privs -all -allowAccessFor -allUsers >/dev/null 2>&1 || true
@@ -17,10 +21,14 @@ workflows:
           sleep 3; nc -z 127.0.0.1 5900 && echo VNC_UP
           python3 -m pip install --user -q websockify 2>&1 | tail -1
           curl -fsSL -o /tmp/cf.tgz https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz && tar -xzf /tmp/cf.tgz -C /tmp
-          (python3 -m websockify 6080 127.0.0.1:5900 > /tmp/wsk.log 2>&1 &)
-          (/tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:6080 > /tmp/cf.log 2>&1 &)
-          for i in $(seq 40); do u=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf.log | head -1); [ -n "$u" ] && break; sleep 2; done
-          echo "TUNNEL_URL=$u"
+          for pair in 6080:5900 6022:22; do
+            (python3 -m websockify ${pair%%:*} 127.0.0.1:${pair##*:} > /tmp/wsk-${pair##*:}.log 2>&1 &)
+            (/tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:${pair%%:*} > /tmp/cf-${pair##*:}.log 2>&1 &)
+          done
+          for port in 5900 22; do
+            for i in $(seq 40); do u=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' /tmp/cf-$port.log | head -1); [ -n "$u" ] && break; sleep 2; done
+            echo "TUNNEL_$port=$u"
+          done
       - name: wait (cancel the build when done)
         script: |
           for i in $(seq 55); do sleep 60; echo "alive $i"; done
