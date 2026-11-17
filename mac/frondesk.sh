@@ -304,14 +304,21 @@ WhatsApp or SMS to the Frondesk number (channel "whatsapp"), or a text to himsel
 (channel "imessage"). Answer each message with the reply tool of the channel it came from. Keep texts
 short and plain.
 
-- He used Claude Cowork / claude.ai projects before. Those live on claude.ai, not on this computer.
-  When he asks (or at the first quiet moment, offer once): use FastLink on his Chrome to open
-  claude.ai/projects, and copy each project's instructions and files into ~/Frondesk/work/<project>/
-  with a CLAUDE.md, so they work here.
 - Gmail: the "gmail*" MCP servers (Frondesk Gmail; one per Google account). Browser tasks: FastLink.
 - Remote help: if he asks for help from Frondesk, open "~/Frondesk/Get Remote Help.command" (open it with the
   `open` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
 - Never send passwords, codes or keys by text.
+
+## His Cowork and Claude Desktop work (READ-ONLY — never change, move or delete anything there)
+His earlier work with Claude Cowork / the Claude app lives on this computer; when he asks about earlier work,
+a document, or "what we did in Cowork", look here first:
+- ~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/
+  - local_<session>.json — one Cowork session (title, dates, settings)
+  - local_<session>/audit.jsonl — that session's full transcript
+  - local_<session>/outputs/ and uploads/ — files it produced / he gave it
+  - agent/memory/ — Cowork's memory about him
+- ~/Library/Application Support/Claude/claude-code-sessions/ — Claude app "Code" sessions
+To work on something from there, COPY it into ~/Frondesk/work/<topic>/ first and work on the copy.
 EOF
 }
 
