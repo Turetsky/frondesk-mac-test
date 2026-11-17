@@ -15,11 +15,22 @@ workflows:
         script: bash mac/build.sh app
       - name: pkg (pkgbuild --sign)
         script: bash mac/build.sh pkg
-      - name: notarize + staple + spctl
-        script: bash mac/build.sh notarize
+      - name: notarytool submit (no wait)
+        script: bash mac/build.sh submit
     artifacts:
       - mac/out/frondesk-setup.pkg
-      - mac/out/notary*.json
+      - mac/out/notary-id.txt
+
+  # after Apple accepted mac-pkg's submission (release.sh polls from Linux): staple + Gatekeeper check
+  mac-staple:
+    name: mac-staple
+    instance_type: mac_mini_m2
+    max_build_duration: 10
+    scripts:
+      - name: staple + spctl   # PKG_URL passed by release.sh at build start
+        script: bash mac/build.sh staple
+    artifacts:
+      - mac/out/frondesk-setup.pkg
 
   # Throwaway macOS VM for a manual GUI test (install test of the .pkg): VNC (password VNC_PW) + SSH through
   # Cloudflare quick tunnels (websockify), prints the tunnel URLs, then waits until cancelled. CANCEL when done.

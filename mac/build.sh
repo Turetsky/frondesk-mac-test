@@ -1,6 +1,7 @@
 #!/bin/bash
 # Frondesk Setup .pkg — build, sign (Developer ID), notarize, staple. Runs on the Codemagic Mac from the
-# synced repo (mac/release.sh puts this dir + the engine there). Stages: keychain | app | pkg | notarize.
+# synced repo (mac/release.sh puts this dir + the engine there). Stages: keychain | app | pkg | submit (mac-pkg),
+# staple (mac-staple).
 # Env (Codemagic app variable group mac_signing, secure): DEVID_APP_P12_B64 DEVID_INSTALLER_P12_B64
 # DEVID_P12_PASS ASC_KEY_P8_B64 ASC_KEY_ID ASC_ISSUER_ID. Codemagic sets BUILD_NUMBER.
 set -euo pipefail
@@ -52,17 +53,23 @@ pkg() {
   pkgutil --check-signature "$PKG"
 }
 
-notarize() {
-  local k sid st; k=$(mktemp -d)/asc.p8; printf '%s' "$ASC_KEY_P8_B64" | base64 -D > "$k"
-  local n=(--key "$k" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
-  xcrun notarytool submit "$PKG" "${n[@]}" --wait --timeout "${NOTARY_TIMEOUT:-20m}" --output-format json > out/notary.json || true
-  cat out/notary.json; echo
-  sid=$(plutil -extract id raw out/notary.json); st=$(plutil -extract status raw out/notary.json 2>/dev/null || echo timeout)
-  xcrun notarytool log "$sid" "${n[@]}" out/notary-log.json >/dev/null 2>&1 && cat out/notary-log.json; echo
-  rm -f "$k"; echo "NOTARY id=$sid status=$st"; [ "$st" = Accepted ]
+# submit only: Apple can take 20+ min, so we don't wait on a paid Mac. release.sh polls Apple from Linux
+# (mac/notary.py) and then runs workflow mac-staple.
+submit() {
+  local k; k=$(mktemp -d)/asc.p8; printf '%s' "$ASC_KEY_P8_B64" | base64 -D > "$k"
+  xcrun notarytool submit "$PKG" --key "$k" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --output-format json > out/notary.json
+  rm -f "$k"; cat out/notary.json; echo
+  plutil -extract id raw out/notary.json > out/notary-id.txt
+}
+
+# mac-staple: PKG_URL = public URL of mac-pkg's notarized (Accepted) pkg
+staple() {
+  rm -rf out build; mkdir -p out build
+  curl -fsSL -o "$PKG" "$PKG_URL"
   xcrun stapler staple "$PKG"; xcrun stapler validate "$PKG"
   spctl -a -vv -t install "$PKG"
-  spctl -a -vv "$APP"
+  pkgutil --expand-full "$PKG" build/x
+  spctl -a -vv build/x/Payload/Applications/Frondesk.app
   shasum -a 256 "$PKG"
 }
 

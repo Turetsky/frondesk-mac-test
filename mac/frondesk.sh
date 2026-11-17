@@ -310,6 +310,13 @@ step_channel() {
   rm -rf "$ROOT/lib/claude-whatsapp" && tar -xzf "$ROOT/tmp/plugin.tgz" -C "$ROOT/lib" && rm -f "$ROOT/tmp/plugin.tgz" || return 1
   logrun claude plugin marketplace add "$ROOT/lib/claude-whatsapp" || logrun claude plugin marketplace update claude-whatsapp || return 1
   logrun claude plugin install whatsapp@claude-whatsapp || return 1
+  # the plugin installs its own deps (deskhub start.mjs --install-deps, locked + once-only) now, not on the
+  # desk's first start (Claude's 30 s connect timeout); Claude may load the source or the cache copy: do both
+  note "Installing the text-message link (one minute)…"
+  for d in "$ROOT/lib/claude-whatsapp/plugin" "$HOME"/.claude/plugins/cache/claude-whatsapp/whatsapp/*; do
+    [ -f "$d/start.mjs" ] || continue
+    (cd "$d" && logrun node start.mjs --install-deps) || return 1
+  done
   ASK_VALUE=$(cat "$ROOT/.phone"); ASK_PH="+1 773 555 1234"
   page_ask phone "Your mobile number (the phone you will text from, with country code):" "Save number"
   ASK_PH=""; printf '%s\n' "$REPLY" > "$ROOT/.phone"
