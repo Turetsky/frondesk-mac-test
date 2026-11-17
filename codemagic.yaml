@@ -19,7 +19,6 @@ workflows:
         script: bash mac/build.sh submit
     artifacts:
       - mac/out/frondesk-setup.pkg
-      - mac/out/notary-id.txt
 
   # after Apple accepted mac-pkg's submission (release.sh polls from Linux): staple + Gatekeeper check
   mac-staple:

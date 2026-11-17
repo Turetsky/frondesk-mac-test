@@ -58,8 +58,7 @@ pkg() {
 submit() {
   local k; k=$(mktemp -d)/asc.p8; printf '%s' "$ASC_KEY_P8_B64" | base64 -D > "$k"
   xcrun notarytool submit "$PKG" --key "$k" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --output-format json > out/notary.json
-  rm -f "$k"; cat out/notary.json; echo
-  plutil -extract id raw out/notary.json > out/notary-id.txt
+  rm -f "$k"; cat out/notary.json; echo   # release.sh reads the submission id from this step's log
 }
 
 # mac-staple: PKG_URL = public URL of mac-pkg's notarized (Accepted) pkg
