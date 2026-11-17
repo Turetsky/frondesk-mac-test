@@ -5,9 +5,10 @@
 #   curl -fsSL https://kit.ytx.app/desk | sh -s -- <invite>     first install (invite from Frondesk admin)
 #   ~/Frondesk/bin/frondesk install                     resume / redo unfinished steps (finished ones are skipped)
 #   ~/Frondesk/bin/frondesk doctor | run | keep | uninstall | redo <step>
+#   ~/Frondesk/bin/frondesk help                         remote help on demand: installs + opens RustDesk, tells Frondesk
 #
 # Steps (each: check → do → verify, done-marker in ~/Frondesk/.state, failures reported to Frondesk):
-#   claim · remote (RustDesk → our server) · node · claude · login (his own claude.ai account) ·
+#   claim · node · claude · token (his own long-lived Claude key) ·
 #   channel (Frondesk number ⇄ session) · fastlink · google · permissions · keeper · power · selftest
 # Body is in main() so `curl | sh` parses everything before anything reads the terminal.
 
@@ -32,12 +33,13 @@ main() {
     run) run_desk ;;
     keep) keep ;;
     doctor) doctor ;;
+    help) remote_help ;;
     uninstall) need_tty; uninstall ;;
     *) die "unknown command: $cmd (install | redo <step> | run | keep | doctor | uninstall)" ;;
   esac
 }
 
-STEPS="claim remote node claude token channel messages fastlink google permissions keeper power selftest"
+STEPS="claim node claude token channel messages fastlink google permissions keeper power selftest"
 
 say() { printf '\033[1m%s\033[0m\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; [ -n "${CUR:-}" ] && { GUIDE="${GUIDE:+$GUIDE
@@ -152,7 +154,7 @@ install_all() {
 
 step_title() {
   case "$1" in
-    claim) echo "Connect to Frondesk" ;; remote) echo "Remote help (so we can assist you)" ;;
+    claim) echo "Connect to Frondesk" ;;
     node) echo "Helper runtime" ;; claude) echo "Install Claude Code" ;; token) echo "Connect your Claude account" ;; messages) echo "Your Mac's Messages (texts to yourself)" ;;
     channel) echo "Link your phone number (text your computer)" ;; fastlink) echo "FastLink for Chrome" ;;
     google) echo "Gmail (Frondesk Gmail)" ;; permissions) echo "Mac permissions (all at once, so nothing asks later)" ;;
@@ -167,7 +169,15 @@ os_desc() {
 
 step_claim() { [ -f "$ROOT/.desk.key" ]; }
 
-# ── remote help: RustDesk pointed at our own server; permanent password reported to Frondesk ──
+# ── remote help, ONLY on request (not an install step): RustDesk pointed at our own server; ID + password to
+# Frondesk. Started by "Get Remote Help.command" in ~/Frondesk, or by the desk when he texts that he needs help.
+remote_help() {
+  need_tty; touch "$LOG"
+  say "Frondesk remote help"
+  if step_remote; then say "Remote help is ready. Frondesk has been told and will connect when you are ready."
+  else say "Remote help could not be set up — Frondesk has been told."; report remote-help FAIL "$(tail -n 6 "$LOG" | cut -c1-120)"; fi
+  printf 'Press Enter to close. ' >/dev/tty; read -r _ </dev/tty || true
+}
 step_remote() {
   is_mac || { note "RustDesk set-up is macOS only here; skipped"; return 0; }
   app=/Applications/RustDesk.app
@@ -190,7 +200,8 @@ step_remote() {
   open "$app"   # by path: a fresh copy isn't registered with Launch Services yet (11-16 test)
   IMAGES="rustdesk-ready"
   you "RustDesk opened. If it shows 'Install' or 'Start service' on the left, click it and enter your Mac password. If macOS asks to allow RustDesk anything, click Allow."
-  pause "Click Done when RustDesk shows a green 'Ready' at the bottom (like the picture)."
+  if [ -n "${CUR:-}" ]; then pause "Click Done when RustDesk shows a green 'Ready' at the bottom (like the picture)."
+  else printf '   Press Enter when RustDesk shows a green Ready at the bottom. ' >/dev/tty; read -r _ </dev/tty || true; fi
   id=$("$app/Contents/MacOS/RustDesk" --get-id 2>>"$LOG" | tr -dc '0-9' | head -c 12)
   [ -n "$id" ] || { note "could not read the RustDesk ID"; return 1; }
   pw=$(LC_ALL=C tr -dc 'a-hj-km-np-z2-9' </dev/urandom | head -c 12)
@@ -298,7 +309,8 @@ short and plain.
   claude.ai/projects, and copy each project's instructions and files into ~/Frondesk/work/<project>/
   with a CLAUDE.md, so they work here.
 - Gmail: the "gmail*" MCP servers (Frondesk Gmail; one per Google account). Browser tasks: FastLink.
-- Remote help: Frondesk can connect with RustDesk if he asks for help.
+- Remote help: if he asks for help from Frondesk, open "~/Frondesk/Get Remote Help.command" (open it with the
+  `open` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
 - Never send passwords, codes or keys by text.
 EOF
 }
@@ -507,6 +519,7 @@ EOF
 }
 write_command() {
   printf '#!/bin/sh\nexec "%s" run\n' "$BIN/frondesk" > "$BIN/Frondesk.command"; chmod 755 "$BIN/Frondesk.command"
+  printf '#!/bin/sh\nexec "%s" help\n' "$BIN/frondesk" > "$ROOT/Get Remote Help.command"; chmod 755 "$ROOT/Get Remote Help.command"
 }
 desk_alive() { p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 
