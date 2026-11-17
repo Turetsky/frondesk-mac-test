@@ -121,6 +121,8 @@ bootstrap() {
 install_all() {
   [ -f "$ST/claim" ] || die "not set up yet: run the install line with your invite"
   touch "$LOG"; chmod 600 "$LOG"
+  mkdir -p "$ROOT/run"; echo $$ > "$ROOT/run/install.pid"
+  is_mac && { [ -f "$ROOT/.term" ] || term_app > "$ROOT/.term"; install_keeper >/dev/null 2>&1 || true; }
   say "Frondesk desk for $(cat "$ROOT/.name") — $(os_desc)"
   note "Log: $LOG. Safe to stop and rerun ($BIN/frondesk install): finished steps are skipped."
   if [ ! -f "$ST/.page_opened" ] && [ -s "$ROOT/.setup_url" ]; then
@@ -148,6 +150,12 @@ install_all() {
   done
   CUR=""; GUIDE=""
   left=""; for s in $STEPS; do [ -f "$ST/$s" ] || left="$left $s"; done
+  if [ -z "$left" ] && [ -f "$ST/.fda_pending" ] && is_mac; then
+    rm -f "$ST/.fda_pending"
+    NOW_TITLE="Last step: restart Terminal once"; MODE=you
+    GUIDE="So the Mac switches on the permissions you just gave: press ⌘Q (Command + Q) in the Terminal window and confirm Quit. The desk opens again by itself within a minute — leave that new window open. Then text the Frondesk number from $(cat "$ROOT/.phone")."
+    say "$NOW_TITLE. $GUIDE"; progress; report install COMPLETE "restart Terminal pending (Full Disk Access)"; return 0
+  fi
   if [ -z "$left" ]; then NOW_TITLE="Your computer is ready"; GUIDE="Text the Frondesk number from $(cat "$ROOT/.phone") — your computer answers."
   else NOW_TITLE="Almost done"; GUIDE="Still to do:$left. Frondesk will help you finish."; fi
   say "$NOW_TITLE. $GUIDE"; progress
@@ -322,15 +330,16 @@ short and plain.
 - If he says "message the developer: …" (or wants to reach the people who built Frondesk), send it with
   `~/Frondesk/bin/frondesk contact "<his message>"` and tell him it was sent.
 
-## His Cowork and Claude Desktop work (READ-ONLY — never change, move or delete anything there)
-His earlier work with Claude Cowork / the Claude app lives on this computer; when he asks about earlier work,
-a document, or "what we did in Cowork", look here first:
-- ~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/
-  - local_<session>.json — one Cowork session (title, dates, settings)
-  - local_<session>/audit.jsonl — that session's full transcript
-  - local_<session>/outputs/ and uploads/ — files it produced / he gave it
-  - agent/memory/ — Cowork's memory about him
-- ~/Library/Application Support/Claude/claude-code-sessions/ — Claude app "Code" sessions
+## His earlier Claude work on this Mac (READ-ONLY — never change, move or delete anything there)
+When he asks about earlier work, look here first:
+- Claude app "Code" tab: transcripts ~/.claude/projects/<folder-slug>/<session>.jsonl (+ memory/ per project);
+  index ~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_<uuid>.json (cliSessionId).
+- Claude Cowork: tasks usually run in Anthropic's cloud or a sealed VM, so their transcripts and memory are
+  usually NOT on this Mac (only remote-session-spaces.json / scheduled-tasks.json in
+  ~/Library/Application Support/Claude/). Files Cowork produced land in the folders he shared with it — ask him
+  which folder, then read them there. If local_<session>/audit.jsonl transcripts exist under
+  ~/Library/Application Support/Claude/local-agent-mode-sessions/, read those.
+- Logins he did inside Cowork (GitHub, gcloud…) never exist on this Mac — see LOGINS.md.
 To work on something from there, COPY it into ~/Frondesk/work/<topic>/ first and work on the copy.
 EOF
 }
@@ -371,7 +380,7 @@ step_connectors() {
   [ -n "$skp" ] && note "Not brought over: $skp"
   if [ -n "$lgn" ]; then
     note "Logins on this computer: $lgn"
-    { printf '# Command-line logins on this computer (checked at setup)\n\nIf he needs GitHub and gh is not logged in here, walk him through `gh auth login --web` once (he approves in the browser). Logins he made inside Cowork may exist only in Cowork'"'"'s sandbox, not here.\n\n'
+    { printf '# Command-line logins on this computer (checked at setup)\n\nIf he needs GitHub and gh is not logged in here, walk him through `gh auth login --web` once (he approves in the browser). Logins he made inside Cowork live in Cowork'"'"'s cloud container or VM, never on this computer.\n\n'
       printf '%s\n' "$lgn" | tr ';' '\n' | sed 's/^ */- /'; } > "$ROOT/work/LOGINS.md"
   fi
   return 0
@@ -470,7 +479,15 @@ step_permissions() {
   t=$(cat "$ROOT/.term")
   note "Claude runs inside $t, so $t gets the permissions — all now, so nothing asks while you are away."
   missing=""
-  perm_pane "Full Disk Access" Privacy_AllFiles probe_fda || missing="$missing fda"
+  # Full Disk Access only takes effect after Terminal restarts (11-16, Zimmerman: the re-check kept failing and the
+  # page looked stuck) → trust his Done, re-check after the restart at the very end
+  if probe_fda; then note "✓ Full Disk Access"; else
+    pane Privacy_AllFiles; IMAGES="privacy-pane privacy-password pick-terminal"
+    you "In the window that opened (Full Disk Access): click '+' under the list, type your Mac password, pick Applications → Utilities → $t, click Open, and make sure $t is switched ON. If the Mac closes $t after that, wait a minute — setup reopens by itself and continues where it stopped."
+    pause "Click Done when $t is switched ON under Full Disk Access."
+    IMAGES=""; MODE=auto; touch "$ST/.fda_pending"
+    note "✓ Full Disk Access (the Mac switches it on when $t restarts — the last step does that)"
+  fi
   for a in "System Events" Finder Messages Mail Calendar Contacts Reminders Notes "Google Chrome"; do
     [ "$a" = "Google Chrome" ] && [ ! -d "/Applications/Google Chrome.app" ] && continue
     perm_app "$a" || missing="$missing auto:$a"
@@ -480,7 +497,7 @@ step_permissions() {
     IMAGES="screen-recording"; you "macOS asks: '$t would like to record this computer's screen' → click 'Open System Settings', then switch $t ON."
     screencapture -x "$ROOT/tmp/p.png" >/dev/null 2>&1; rm -f "$ROOT/tmp/p.png"
     IMAGES="screen-recording privacy-pane"
-    pause "Click Done when $t is switched ON under Screen Recording (if macOS offers 'Quit & Reopen', click 'Later')."
+    pause "Click Done when $t is switched ON under Screen Recording (if the Mac closes $t, setup reopens by itself within a minute)."
     probe_sr || missing="$missing screen-recording"
   fi
   IMAGES=""
@@ -535,6 +552,17 @@ perm_pane() {
 # ── keeper: starts the desk at login and restarts it if it stops (macOS LaunchAgent) ──
 step_keeper() {
   is_mac || { note "macOS only (Linux: run '$BIN/frondesk run' yourself); skipped"; return 0; }
+  install_keeper || return 1
+  touch "$ST/.desk_on"   # from now on the keeper keeps the desk window open (not just the installer)
+  keep >/dev/null 2>&1 || true
+  note "the desk opens in its own $(cat "$ROOT/.term" 2>/dev/null || echo Terminal) window in a few seconds — leave it open (it reopens itself if closed)."
+  i=0; while [ $i -lt 30 ]; do desk_alive && return 0; sleep 2; i=$((i + 1)); done
+  note "desk window did not start"; return 1
+}
+
+# the launchd keeper (every 60 s + at login). Installed when setup STARTS: macOS quits Terminal when Full Disk
+# Access / Screen Recording is switched on (Zimmerman 11-16), and the keeper then reopens the setup by itself.
+install_keeper() {
   write_command
   la="$HOME/Library/LaunchAgents/ai.frondesk.keeper.plist"; mkdir -p "$HOME/Library/LaunchAgents" "$ROOT/logs"
   cat > "$la" <<EOF
@@ -550,14 +578,13 @@ step_keeper() {
   <key>StandardErrorPath</key><string>$ROOT/logs/keeper.log</string>
 </dict></plist>
 EOF
-  launchctl bootout "gui/$(id -u)/ai.frondesk.keeper" >/dev/null 2>&1 || true
-  logrun launchctl bootstrap "gui/$(id -u)" "$la" || return 1
-  note "the desk opens in its own $(cat "$ROOT/.term" 2>/dev/null || echo Terminal) window in a few seconds — leave it open (it reopens itself if closed)."
-  i=0; while [ $i -lt 30 ]; do desk_alive && return 0; sleep 2; i=$((i + 1)); done
-  note "desk window did not start"; return 1
+  launchctl print "gui/$(id -u)/ai.frondesk.keeper" >/dev/null 2>&1 && return 0
+  logrun launchctl bootstrap "gui/$(id -u)" "$la"
 }
+
 write_command() {
   printf '#!/bin/sh\nexec "%s" run\n' "$BIN/frondesk" > "$BIN/Frondesk.command"; chmod 755 "$BIN/Frondesk.command"
+  printf '#!/bin/sh\nexec "%s" install\n' "$BIN/frondesk" > "$BIN/Setup.command"; chmod 755 "$BIN/Setup.command"
   printf '#!/bin/sh\nexec "%s" help\n' "$BIN/frondesk" > "$ROOT/Get Remote Help.command"; chmod 755 "$ROOT/Get Remote Help.command"
   printf '#!/bin/sh\nexec "%s" contact\n' "$BIN/frondesk" > "$ROOT/Contact the Developer.command"; chmod 755 "$ROOT/Contact the Developer.command"
 }
@@ -565,10 +592,17 @@ desk_alive() { p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] && kill 
 
 # frondesk keep (LaunchAgent, every 60 s): open the desk window unless it runs
 keep() {
-  desk_alive && exit 0
   [ -f "$ROOT/.paused" ] && exit 0
-  printf '%s keeper: desk not running, opening it\n' "$(date '+%F %T')"
+  [ -f "$ST/keeper" ] && [ ! -f "$ST/.desk_on" ] && touch "$ST/.desk_on"   # installs from before the early keeper
   app=$(cat "$ROOT/.term" 2>/dev/null || echo Terminal)
+  if [ ! -f "$ST/.desk_on" ]; then
+    # setup not finished: reopen it if its Terminal was closed (finished steps are skipped)
+    p=$(cat "$ROOT/run/install.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && exit 0
+    printf '%s keeper: setup not running, reopening it\n' "$(date '+%F %T')"
+    open -a "$app" "$BIN/Setup.command"; exit 0
+  fi
+  desk_alive && exit 0
+  printf '%s keeper: desk not running, opening it\n' "$(date '+%F %T')"
   open -a "$app" "$BIN/Frondesk.command"
 }
 
