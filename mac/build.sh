@@ -8,13 +8,13 @@ set -euo pipefail
 cd "$(dirname "$0")"
 TEAM=B64X7H65W6; VER=1.0.${BUILD_NUMBER:-0}
 APP_SIGN="Developer ID Application: Jacob Turetsky ($TEAM)"; PKG_SIGN="Developer ID Installer: Jacob Turetsky ($TEAM)"
-KC=$HOME/Library/Keychains/frondesk-signing.keychain-db
+KC=$HOME/Library/Keychains/frondesk-signing.keychain-db; KCP=$HOME/.frondesk-signing.kcpass   # throwaway pass, build VM only
 APP=build/root/Applications/Frondesk.app; PKG=out/frondesk-setup.pkg
 
 keychain() {
   # own keychain: Codemagic's `keychain add-certificates` lets only codesign use the key (pkgbuild then fails
   # with errSecInteractionNotAllowed); the partition list apple-tool:,apple: covers codesign + pkgbuild.
-  local kp; kp=$(uuidgen)
+  local kp; kp=$(uuidgen); (umask 077; printf '%s' "$kp" > "$KCP")
   security create-keychain -p "$kp" "$KC"; security set-keychain-settings "$KC"; security unlock-keychain -p "$kp" "$KC"
   security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"'); security default-keychain -d user -s "$KC"
   for t in APP INSTALLER; do v=DEVID_${t}_P12_B64
@@ -30,7 +30,11 @@ keychain() {
   security find-identity -v -p basic "$KC" | grep -F "$PKG_SIGN"
 }
 
+# each Codemagic step is a new shell: unlock again (a locked keychain → codesign errSecInternalComponent)
+unlock() { security unlock-keychain -p "$(cat "$KCP")" "$KC"; }
+
 app() {
+  unlock
   rm -rf build out; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/scripts out
   clang -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -O2 -o "$APP/Contents/MacOS/Frondesk" launcher.c
   install -m 755 open.sh "$APP/Contents/Resources/open.sh"
@@ -44,6 +48,7 @@ app() {
 }
 
 pkg() {
+  unlock
   install -m 755 postinstall build/scripts/postinstall
   # not relocatable: always /Applications/Frondesk.app, even if a copy with the same bundle id exists elsewhere
   pkgbuild --analyze --root build/root build/component.plist
