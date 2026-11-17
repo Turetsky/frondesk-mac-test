@@ -5,6 +5,7 @@
 #   curl -fsSL https://kit.ytx.app/desk | sh -s -- <invite>     first install (invite from Frondesk admin)
 #   ~/Frondesk/bin/frondesk install                     resume / redo unfinished steps (finished ones are skipped)
 #   ~/Frondesk/bin/frondesk doctor | run | keep | uninstall | redo <step>
+#   ~/Frondesk/bin/frondesk contact "<message>"         message straight to the Frondesk developers (also: setup page)
 #   ~/Frondesk/bin/frondesk help                         remote help on demand: installs + opens RustDesk, tells Frondesk
 #
 # Steps (each: check → do → verify, done-marker in ~/Frondesk/.state, failures reported to Frondesk):
@@ -34,6 +35,7 @@ main() {
     keep) keep ;;
     doctor) doctor ;;
     help) remote_help ;;
+    contact) shift; contact_dev "$*" ;;
     uninstall) need_tty; uninstall ;;
     *) die "unknown command: $cmd (install | redo <step> | run | keep | doctor | uninstall)" ;;
   esac
@@ -171,6 +173,14 @@ step_claim() { [ -f "$ROOT/.desk.key" ]; }
 
 # ── remote help, ONLY on request (not an install step): RustDesk pointed at our own server; ID + password to
 # Frondesk. Started by "Get Remote Help.command" in ~/Frondesk, or by the desk when he texts that he needs help.
+# message to the developers: one channel with the desk's reports (desk_events → boss), name/desk attached
+contact_dev() {
+  [ -n "$1" ] || { open "$(cat "$ROOT/.setup_url")#contact"; return 0; }
+  if curl -fsS -m 20 -o /dev/null -X POST -H @"$(key_hdr)" --data-urlencode "step=contact" --data-urlencode "status=message" \
+       --data-urlencode "msg=$1" "$FD_URL/desk/report"; then echo "Sent to the Frondesk developers."
+  else echo "Could not send right now — try again in a minute, or use the setup page."; return 1; fi
+}
+
 remote_help() {
   need_tty; touch "$LOG"
   say "Frondesk remote help"
@@ -309,6 +319,8 @@ short and plain.
   `open` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
 - Never send passwords, codes or keys by text.
 - Command-line tools already logged in on this computer (gh, git, gcloud…): see LOGINS.md here.
+- If he says "message the developer: …" (or wants to reach the people who built Frondesk), send it with
+  `~/Frondesk/bin/frondesk contact "<his message>"` and tell him it was sent.
 
 ## His Cowork and Claude Desktop work (READ-ONLY — never change, move or delete anything there)
 His earlier work with Claude Cowork / the Claude app lives on this computer; when he asks about earlier work,
@@ -547,6 +559,7 @@ EOF
 write_command() {
   printf '#!/bin/sh\nexec "%s" run\n' "$BIN/frondesk" > "$BIN/Frondesk.command"; chmod 755 "$BIN/Frondesk.command"
   printf '#!/bin/sh\nexec "%s" help\n' "$BIN/frondesk" > "$ROOT/Get Remote Help.command"; chmod 755 "$ROOT/Get Remote Help.command"
+  printf '#!/bin/sh\nexec "%s" contact\n' "$BIN/frondesk" > "$ROOT/Contact the Developer.command"; chmod 755 "$ROOT/Contact the Developer.command"
 }
 desk_alive() { p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 
