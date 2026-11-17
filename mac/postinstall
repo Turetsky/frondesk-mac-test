@@ -1,0 +1,27 @@
+#!/bin/sh
+# Frondesk Setup .pkg postinstall (runs as root). The Worker serves the pkg as
+# "Frondesk Setup (fdinv_<32 hex>).pkg": the invite is in the file name ($1 = the package path).
+# As the logged-in user: write ~/Frondesk/start.command (runs the signed engine inside Frondesk.app)
+# and open it in Terminal; the engine then opens the setup page itself.
+APP=/Applications/Frondesk.app
+inv=$(basename "${1:-${PACKAGE_PATH:-}}" | grep -oE 'fdinv_[0-9a-f]{32}' | head -1)
+user=$(stat -f%Su /dev/console)
+case "$user" in ""|root|loginwindow|_mbsetupuser) echo "frondesk: no one logged in at the screen"; exit 0 ;; esac
+uid=$(id -u "$user"); home=$(dscl . -read "/Users/$user" NFSHomeDirectory | awk '{print $2}')
+as_user() { launchctl asuser "$uid" sudo -u "$user" "$@"; }
+
+if [ -z "$inv" ]; then
+  echo "frondesk: no invite in the package name ($1)"
+  as_user open "https://kit.ytx.app/"
+  as_user osascript -e 'display dialog "Frondesk is installed, but this download was not made from your personal Frondesk link, so it cannot finish the set-up.\n\nOpen the link Frondesk sent you and click Download there." with title "Frondesk" buttons {"OK"} default button 1 with icon caution' >/dev/null 2>&1 &
+  exit 0
+fi
+
+sudo -u "$user" sh -c 'umask 077; mkdir -p "$1/Frondesk" && cat > "$1/Frondesk/start.command" && chmod 700 "$1/Frondesk/start.command"' sh "$home" <<EOF
+#!/bin/sh
+# Frondesk desk set-up (written by the Frondesk installer). Safe to run again: finished steps are skipped.
+if [ -f "\$HOME/Frondesk/.state/claim" ] && [ -x "\$HOME/Frondesk/bin/frondesk" ]; then exec "\$HOME/Frondesk/bin/frondesk" install; fi
+FRONDESK_ENGINE="$APP/Contents/Resources/frondesk" exec /bin/sh "$APP/Contents/Resources/frondesk" $inv
+EOF
+as_user open -a Terminal "$home/Frondesk/start.command"
+exit 0

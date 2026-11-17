@@ -1,6 +1,28 @@
-# Throwaway macOS VM for a manual GUI test: opens VNC (password from VNC_PW) through a Cloudflare
-# quick tunnel (websockify in front of :5900), prints the tunnel URL, then waits until cancelled.
+# Codemagic workflows for the Frondesk Mac installer. SOURCE: claude-kit/mac/codemagic.yaml — mac/release.sh
+# copies it (with mac/ and the engine) into the public build repo Turetsky/frondesk-mac-test; don't edit there.
+# Secrets: only in the Codemagic app's secure variable group mac_signing — never in this repo.
 workflows:
+  mac-pkg:
+    name: mac-pkg
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      groups: [mac_signing]   # DEVID_{APP,INSTALLER}_P12_B64, DEVID_P12_PASS, ASC_KEY_P8_B64, ASC_KEY_ID, ASC_ISSUER_ID
+    scripts:
+      - name: keychain
+        script: bash mac/build.sh keychain
+      - name: app (codesign)
+        script: bash mac/build.sh app
+      - name: pkg (pkgbuild --sign)
+        script: bash mac/build.sh pkg
+      - name: notarize + staple + spctl
+        script: bash mac/build.sh notarize
+    artifacts:
+      - mac/out/frondesk-setup.pkg
+      - mac/out/notary*.json
+
+  # Throwaway macOS VM for a manual GUI test (install test of the .pkg): VNC (password VNC_PW) + SSH through
+  # Cloudflare quick tunnels (websockify), prints the tunnel URLs, then waits until cancelled. CANCEL when done.
   mac-gui:
     name: mac-gui
     instance_type: mac_mini_m2
@@ -32,68 +54,3 @@ workflows:
       - name: wait (cancel the build when done)
         script: |
           for i in $(seq 55); do sleep 60; echo "alive $i"; done
-
-  # Developer ID signing + notarization smoke test: tiny C app -> codesign -> signed component pkg
-  # -> notarytool (ASC API key) -> staple -> spctl. Secrets come only from the app-level secure
-  # variable group mac_signing (Developer ID p12s + App Store Connect API key for notarytool).
-  mac-sign-test:
-    name: mac-sign-test
-    instance_type: mac_mini_m2
-    max_build_duration: 15
-    environment:
-      groups: [mac_signing]   # DEVID_{APP,INSTALLER}_P12_B64, DEVID_P12_PASS, ASC_KEY_P8_B64, ASC_KEY_ID, ASC_ISSUER_ID
-      vars:
-        TEAM: B64X7H65W6
-        PKG_ID: com.frondesk.signtest
-    scripts:
-      - name: keychain
-        script: |
-          set -euo pipefail
-          # own temp keychain (not `keychain add-certificates`: its key ACL only allows codesign, so pkgbuild
-          # fails with errSecInteractionNotAllowed). Partition list apple-tool:,apple: covers codesign + pkgbuild.
-          KC=$HOME/Library/Keychains/devid-signing.keychain-db; KP=$(uuidgen)
-          security create-keychain -p "$KP" $KC; security set-keychain-settings $KC; security unlock-keychain -p "$KP" $KC
-          security list-keychains -d user -s $KC $(security list-keychains -d user | tr -d '"'); security default-keychain -d user -s $KC
-          for t in APP INSTALLER; do v=DEVID_${t}_P12_B64
-            printf '%s' "${!v}" | base64 -D > /tmp/$t.p12
-            security import /tmp/$t.p12 -k $KC -f pkcs12 -P "$DEVID_P12_PASS" \
-              -T /usr/bin/codesign -T /usr/bin/pkgbuild -T /usr/bin/productbuild -T /usr/bin/productsign
-            rm -f /tmp/$t.p12; done
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KP" $KC >/dev/null
-          # the Developer ID G2 intermediate isn't on the build image; without it the identities aren't valid
-          curl -fsSL -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
-          security import /tmp/DeveloperIDG2CA.cer -k $KC
-          security find-identity -v -p codesigning $KC | grep 'Developer ID Application'
-          security find-identity -v -p basic $KC | grep 'Developer ID Installer'
-      - name: build + sign app and pkg
-        script: |
-          set -euo pipefail
-          APP_ID="Developer ID Application: Jacob Turetsky ($TEAM)"; INS_ID="Developer ID Installer: Jacob Turetsky ($TEAM)"
-          A=root/Applications/FrondeskSignTest.app; mkdir -p $A/Contents/MacOS out
-          printf '#include <stdio.h>\nint main(void){puts("hello from FrondeskSignTest");return 0;}\n' > hello.c
-          clang -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -O2 -o $A/Contents/MacOS/FrondeskSignTest hello.c
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $PKG_ID" -c 'Add :CFBundleName string FrondeskSignTest' \
-            -c 'Add :CFBundleExecutable string FrondeskSignTest' -c 'Add :CFBundlePackageType string APPL' \
-            -c "Add :CFBundleShortVersionString string 1.0.$BUILD_NUMBER" -c "Add :CFBundleVersion string $BUILD_NUMBER" \
-            -c 'Add :LSMinimumSystemVersion string 12.0' $A/Contents/Info.plist
-          codesign --force --options runtime --timestamp -s "$APP_ID" $A
-          codesign --verify --strict --verbose=2 $A
-          pkgbuild --root root --install-location / --identifier $PKG_ID --version 1.0.$BUILD_NUMBER \
-            --sign "$INS_ID" --timestamp out/FrondeskSignTest.pkg
-          pkgutil --check-signature out/FrondeskSignTest.pkg
-      - name: notarize + staple + spctl
-        script: |
-          set -euo pipefail
-          K=$(mktemp -d)/asc.p8; printf '%s' "$ASC_KEY_P8_B64" | base64 -D > $K
-          N=(--key $K --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
-          xcrun notarytool submit out/FrondeskSignTest.pkg "${N[@]}" --wait --timeout 8m --output-format json | tee out/notary.json
-          SID=$(plutil -extract id raw out/notary.json); ST=$(plutil -extract status raw out/notary.json)
-          xcrun notarytool log "$SID" "${N[@]}" out/notary-log.json || true; cat out/notary-log.json || true
-          rm -f $K; echo "NOTARY id=$SID status=$ST"; [ "$ST" = Accepted ]
-          xcrun stapler staple out/FrondeskSignTest.pkg && xcrun stapler validate out/FrondeskSignTest.pkg
-          spctl -a -vvv -t install out/FrondeskSignTest.pkg
-          spctl -a -vv root/Applications/FrondeskSignTest.app
-          root/Applications/FrondeskSignTest.app/Contents/MacOS/FrondeskSignTest
-    artifacts:
-      - out/FrondeskSignTest.pkg
-      - out/notary*.json
