@@ -35,15 +35,13 @@ workflows:
 
   # Developer ID signing + notarization smoke test: tiny C app -> codesign -> signed component pkg
   # -> notarytool (ASC API key) -> staple -> spctl. Secrets come only from the app-level secure
-  # variable group mac_signing and the KhalZC_ASC_Key App Store Connect integration.
+  # variable group mac_signing (Developer ID p12s + App Store Connect API key for notarytool).
   mac-sign-test:
     name: mac-sign-test
     instance_type: mac_mini_m2
     max_build_duration: 15
-    integrations:
-      app_store_connect: KhalZC_ASC_Key   # -> APP_STORE_CONNECT_{PRIVATE_KEY,KEY_IDENTIFIER,ISSUER_ID}
     environment:
-      groups: [mac_signing]               # DEVID_APP_P12_B64, DEVID_INSTALLER_P12_B64, DEVID_P12_PASS
+      groups: [mac_signing]   # DEVID_{APP,INSTALLER}_P12_B64, DEVID_P12_PASS, ASC_KEY_P8_B64, ASC_KEY_ID, ASC_ISSUER_ID
       vars:
         TEAM: B64X7H65W6
         PKG_ID: com.frondesk.signtest
@@ -86,8 +84,8 @@ workflows:
       - name: notarize + staple + spctl
         script: |
           set -euo pipefail
-          K=$(mktemp -d)/asc.p8; printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > $K
-          N=(--key $K --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" --issuer "$APP_STORE_CONNECT_ISSUER_ID")
+          K=$(mktemp -d)/asc.p8; printf '%s' "$ASC_KEY_P8_B64" | base64 -D > $K
+          N=(--key $K --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID")
           xcrun notarytool submit out/FrondeskSignTest.pkg "${N[@]}" --wait --timeout 8m --output-format json | tee out/notary.json
           SID=$(plutil -extract id raw out/notary.json); ST=$(plutil -extract status raw out/notary.json)
           xcrun notarytool log "$SID" "${N[@]}" out/notary-log.json || true; cat out/notary-log.json || true
