@@ -39,7 +39,7 @@ main() {
   esac
 }
 
-STEPS="claim node claude token channel messages fastlink google permissions keeper power selftest"
+STEPS="claim node claude token channel connectors messages fastlink google permissions keeper power selftest"
 
 say() { printf '\033[1m%s\033[0m\n' "$*" >&2; }
 note() { printf '   %s\n' "$*" >&2; [ -n "${CUR:-}" ] && { GUIDE="${GUIDE:+$GUIDE
@@ -156,7 +156,7 @@ step_title() {
   case "$1" in
     claim) echo "Connect to Frondesk" ;;
     node) echo "Helper runtime" ;; claude) echo "Install Claude Code" ;; token) echo "Connect your Claude account" ;; messages) echo "Your Mac's Messages (texts to yourself)" ;;
-    channel) echo "Link your phone number (text your computer)" ;; fastlink) echo "FastLink for Chrome" ;;
+    channel) echo "Link your phone number (text your computer)" ;; connectors) echo "Your existing connectors (from the Claude app)" ;; fastlink) echo "FastLink for Chrome" ;;
     google) echo "Gmail (Frondesk Gmail)" ;; permissions) echo "Mac permissions (all at once, so nothing asks later)" ;;
     keeper) echo "Keep it running" ;; power) echo "Stay awake while plugged in" ;; selftest) echo "Final check" ;; *) echo "$1" ;;
   esac
@@ -308,6 +308,7 @@ short and plain.
 - Remote help: if he asks for help from Frondesk, open "~/Frondesk/Get Remote Help.command" (open it with the
   `open` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
 - Never send passwords, codes or keys by text.
+- Command-line tools already logged in on this computer (gh, git, gcloud…): see LOGINS.md here.
 
 ## His Cowork and Claude Desktop work (READ-ONLY — never change, move or delete anything there)
 His earlier work with Claude Cowork / the Claude app lives on this computer; when he asks about earlier work,
@@ -343,6 +344,25 @@ step_channel() {
   note "From $REPLY you can WhatsApp or text the Frondesk number to reach this computer."
   printf '{\n  "selfPhone": "%s",\n  "allowFrom": ["%s"],\n  "prefix": ""\n}\n' "$phone" "$phone" > "$ROOT/channel/config.json"
   chmod 700 "$ROOT/channel"; chmod 600 "$ROOT/channel/config.json"
+}
+
+# ── his existing local connectors (Claude app MCP servers + extensions) → the desk's Claude config ──
+# scripts/desk/connectors.mjs; best effort, never fails the install
+step_connectors() {
+  bundle connectors.mjs "$ROOT/lib/connectors.mjs" || { note "Could not check for existing connectors — not needed to continue."; return 0; }
+  out=$(cd "$ROOT/work" 2>/dev/null || cd "$ROOT"; CLAUDE_EXE="$(command -v claude)" node "$ROOT/lib/connectors.mjs" 2>>"$LOG" | tail -1)
+  printf 'connectors: %s\n' "$out" >>"$LOG"
+  names=$(printf '%s' "$out" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const r=JSON.parse(s);console.log(r.imported.map(x=>x.name).join(", ")+"\t"+r.skipped.map(x=>x.name+" ("+x.why+")").join("; ")+"\t"+(r.logins||[]).map(x=>x.tool+": "+x.status).join("; "))}catch{console.log("\t\t")}})')
+  lgn=${names##*"$(printf '\t')"}; names=${names%"$(printf '\t')"*}
+  imp=${names%%"$(printf '\t')"*}; skp=${names#*"$(printf '\t')"}
+  if [ -n "$imp" ]; then note "Using your connectors: $imp"; else note "No connectors from the Claude app to bring over."; fi
+  [ -n "$skp" ] && note "Not brought over: $skp"
+  if [ -n "$lgn" ]; then
+    note "Logins on this computer: $lgn"
+    { printf '# Command-line logins on this computer (checked at setup)\n\nIf he needs GitHub and gh is not logged in here, walk him through `gh auth login --web` once (he approves in the browser). Logins he made inside Cowork may exist only in Cowork'"'"'s sandbox, not here.\n\n'
+      printf '%s\n' "$lgn" | tr ';' '\n' | sed 's/^ */- /'; } > "$ROOT/work/LOGINS.md"
+  fi
+  return 0
 }
 
 # ── his Mac's own Messages (iMessage + SMS forwarded from his iPhone): Anthropic's iMessage channel plugin ──
