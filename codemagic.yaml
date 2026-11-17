@@ -56,7 +56,11 @@ workflows:
             printf '%s' "${!v}" | base64 -D > /tmp/$t.p12
             keychain add-certificates --certificate /tmp/$t.p12 --certificate-password "$DEVID_P12_PASS"
             rm -f /tmp/$t.p12; done
-          security find-identity -v -p codesigning; security find-identity -v -p basic | grep 'Developer ID Installer'
+          # the Developer ID G2 intermediate isn't on the build image; without it the identities aren't valid
+          curl -fsSL -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+          security import /tmp/DeveloperIDG2CA.cer -k "$(security default-keychain -d user | tr -d ' "')"
+          security find-identity -v -p codesigning | grep 'Developer ID Application'
+          security find-identity -v -p basic | grep 'Developer ID Installer'
       - name: build + sign app and pkg
         script: |
           set -euo pipefail
