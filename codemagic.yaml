@@ -32,3 +32,60 @@ workflows:
       - name: wait (cancel the build when done)
         script: |
           for i in $(seq 55); do sleep 60; echo "alive $i"; done
+
+  # Developer ID signing + notarization smoke test: tiny C app -> codesign -> signed component pkg
+  # -> notarytool (ASC API key) -> staple -> spctl. Secrets come only from the app-level secure
+  # variable group mac_signing and the KhalZC_ASC_Key App Store Connect integration.
+  mac-sign-test:
+    name: mac-sign-test
+    instance_type: mac_mini_m2
+    max_build_duration: 15
+    integrations:
+      app_store_connect: KhalZC_ASC_Key   # -> APP_STORE_CONNECT_{PRIVATE_KEY,KEY_IDENTIFIER,ISSUER_ID}
+    environment:
+      groups: [mac_signing]               # DEVID_APP_P12_B64, DEVID_INSTALLER_P12_B64, DEVID_P12_PASS
+      vars:
+        TEAM: B64X7H65W6
+        PKG_ID: com.frondesk.signtest
+    scripts:
+      - name: keychain
+        script: |
+          set -euo pipefail
+          keychain initialize
+          for t in APP INSTALLER; do v=DEVID_${t}_P12_B64
+            printf '%s' "${!v}" | base64 -D > /tmp/$t.p12
+            keychain add-certificates --certificate /tmp/$t.p12 --certificate-password "$DEVID_P12_PASS"
+            rm -f /tmp/$t.p12; done
+          security find-identity -v -p codesigning; security find-identity -v -p basic | grep 'Developer ID Installer'
+      - name: build + sign app and pkg
+        script: |
+          set -euo pipefail
+          APP_ID="Developer ID Application: Jacob Turetsky ($TEAM)"; INS_ID="Developer ID Installer: Jacob Turetsky ($TEAM)"
+          A=root/Applications/FrondeskSignTest.app; mkdir -p $A/Contents/MacOS out
+          printf '#include <stdio.h>\nint main(void){puts("hello from FrondeskSignTest");return 0;}\n' > hello.c
+          clang -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -O2 -o $A/Contents/MacOS/FrondeskSignTest hello.c
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $PKG_ID" -c 'Add :CFBundleName string FrondeskSignTest' \
+            -c 'Add :CFBundleExecutable string FrondeskSignTest' -c 'Add :CFBundlePackageType string APPL' \
+            -c "Add :CFBundleShortVersionString string 1.0.$BUILD_NUMBER" -c "Add :CFBundleVersion string $BUILD_NUMBER" \
+            -c 'Add :LSMinimumSystemVersion string 12.0' $A/Contents/Info.plist
+          codesign --force --options runtime --timestamp -s "$APP_ID" $A
+          codesign --verify --strict --verbose=2 $A
+          pkgbuild --root root --install-location / --identifier $PKG_ID --version 1.0.$BUILD_NUMBER \
+            --sign "$INS_ID" --timestamp out/FrondeskSignTest.pkg
+          pkgutil --check-signature out/FrondeskSignTest.pkg
+      - name: notarize + staple + spctl
+        script: |
+          set -euo pipefail
+          K=$(mktemp -d)/asc.p8; printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" > $K
+          N=(--key $K --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" --issuer "$APP_STORE_CONNECT_ISSUER_ID")
+          xcrun notarytool submit out/FrondeskSignTest.pkg "${N[@]}" --wait --timeout 8m --output-format json | tee out/notary.json
+          SID=$(plutil -extract id raw out/notary.json); ST=$(plutil -extract status raw out/notary.json)
+          xcrun notarytool log "$SID" "${N[@]}" out/notary-log.json || true; cat out/notary-log.json || true
+          rm -f $K; echo "NOTARY id=$SID status=$ST"; [ "$ST" = Accepted ]
+          xcrun stapler staple out/FrondeskSignTest.pkg && xcrun stapler validate out/FrondeskSignTest.pkg
+          spctl -a -vvv -t install out/FrondeskSignTest.pkg
+          spctl -a -vv root/Applications/FrondeskSignTest.app
+          root/Applications/FrondeskSignTest.app/Contents/MacOS/FrondeskSignTest
+    artifacts:
+      - out/FrondeskSignTest.pkg
+      - out/notary*.json
