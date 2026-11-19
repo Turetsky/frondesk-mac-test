@@ -26,6 +26,15 @@ keychain() {
   # the Developer ID G2 intermediate isn't on the build image; without it neither identity is valid
   curl -fsSL -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
   security import /tmp/DeveloperIDG2CA.cer -k "$KC"
+  # 11-19: the chain stopped building on the image (CSSMERR_TP_NOT_TRUSTED, codesign errSecInternalComponent):
+  # bring Apple's root too, and print why a chain fails so the next failure explains itself
+  curl -fsSL -o /tmp/AppleRootCA.cer https://www.apple.com/appleca/AppleIncRootCertificate.cer
+  security import /tmp/AppleRootCA.cer -k "$KC" || true
+  date -u
+  for n in "$APP_SIGN" "$PKG_SIGN"; do
+    security find-certificate -c "$n" -p "$KC" > /tmp/leaf.pem
+    security verify-cert -c /tmp/leaf.pem -k "$KC" -v || true
+  done
   security find-identity -v -p codesigning "$KC" | grep -F "$APP_SIGN"
   security find-identity -v -p basic "$KC" | grep -F "$PKG_SIGN"
 }
