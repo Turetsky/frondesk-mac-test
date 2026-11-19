@@ -7,6 +7,9 @@
 #   ~/Frondesk/bin/frondesk doctor | run | keep | uninstall | redo <step>
 #   ~/Frondesk/bin/frondesk contact "<message>"         message straight to the Frondesk developers (also: setup page)
 #   ~/Frondesk/bin/frondesk help                         remote help on demand: installs + opens RustDesk, tells Frondesk
+#   ~/Frondesk/bin/frondesk refresh                      after an engine update: rewrite CLAUDE.md, restart the desk
+# Updates without anyone at the computer: admin "update=<desk>" → the keeper (every 60 s) takes it from
+# GET /desk/cmd, re-fetches this engine (sha256 checked), runs `refresh` and reports "update ok|FAIL".
 #
 # Steps (each: check → do → verify, done-marker in ~/Frondesk/.state, failures reported to Frondesk):
 #   claim · node · claude · token (his own long-lived Claude key) ·
@@ -36,8 +39,9 @@ main() {
     doctor) doctor ;;
     help) remote_help ;;
     contact) shift; contact_dev "$*" ;;
+    refresh) refresh ;;
     uninstall) need_tty; uninstall ;;
-    *) die "unknown command: $cmd (install | redo <step> | run | keep | doctor | uninstall)" ;;
+    *) die "unknown command: $cmd (install | redo <step> | run | keep | doctor | refresh | uninstall)" ;;
   esac
 }
 
@@ -625,8 +629,37 @@ write_command() {
 }
 desk_alive() { p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 
-# frondesk keep (LaunchAgent, every 60 s): open the desk window unless it runs
+# admin command waiting for this desk? (GET /desk/cmd, taken once) — from the keeper, every 60 s
+check_cmd() {
+  [ -f "$ROOT/.desk.hdr" ] || return 0
+  c=$(curl -fsS -m 15 -H @"$(key_hdr)" "$FD_URL/desk/cmd" 2>/dev/null) || return 0
+  case "$c" in *'"cmd":"update"'*) self_update "$(printf '%s' "$c" | sed -n 's/.*"sha256":"\([0-9a-f]\{64\}\)".*/\1/p')" ;; esac
+}
+sha256_of() { if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1"; else sha256sum "$1"; fi | cut -c1-64; }
+# new engine from Frondesk, only if it matches the checksum the command carried; then the NEW engine refreshes
+self_update() {
+  [ -n "$1" ] || { report update FAIL "no checksum in the command"; return 0; }
+  curl -fsS -m 120 -o "$BIN/frondesk.part" "$FD_URL/desk" 2>/dev/null || { report update FAIL "engine download failed"; return 0; }
+  if [ "$(sha256_of "$BIN/frondesk.part")" != "$1" ] || ! sh -n "$BIN/frondesk.part" 2>/dev/null; then
+    rm -f "$BIN/frondesk.part"; report update FAIL "engine checksum or syntax mismatch; kept the old one"; return 0
+  fi
+  chmod 755 "$BIN/frondesk.part" && mv "$BIN/frondesk.part" "$BIN/frondesk" || { report update FAIL "could not replace the engine"; return 0; }
+  "$BIN/frondesk" refresh
+}
+# after an engine update: this engine's CLAUDE.md + launchers, and the desk restarted on it (same window)
+refresh() {
+  mkdir -p "$ROOT/run"
+  write_desk_md
+  is_mac && write_command
+  if desk_alive; then touch "$ROOT/run/reexec"; pkill -f "expect -f $BIN/desk.exp" 2>/dev/null; how="desk restarting"
+  else how="desk not running (starts on the new engine)"; fi
+  report update ok "engine $(sha256_of "$BIN/frondesk" | cut -c1-12) · CLAUDE.md rewritten · $how"
+  echo "Frondesk updated: $how."
+}
+
+# frondesk keep (LaunchAgent, every 60 s): admin command, then open the desk window unless it runs
 keep() {
+  check_cmd
   [ -f "$ROOT/.paused" ] && exit 0
   [ -f "$ST/keeper" ] && [ ! -f "$ST/.desk_on" ] && touch "$ST/.desk_on"   # installs from before the early keeper
   app=$(cat "$ROOT/.term" 2>/dev/null || echo Terminal)
@@ -665,6 +698,8 @@ run_desk() {
         --allowedTools "$tools" --append-system-prompt "$DESK_PROMPT")
     ran=$(( $(date +%s) - t0 ))
     [ $ran -ge 60 ] && touch "$ROOT/run/has-session"
+    # engine updated (refresh): continue on the new engine in this same window
+    if [ -f "$ROOT/run/reexec" ]; then rm -f "$ROOT/run/reexec" "$ROOT/run/desk.pid"; exec "$BIN/frondesk" run; fi
     # a --continue that finds nothing exits at once: drop the marker so the next start is fresh
     [ $ran -lt 30 ] && [ -n "$cont" ] && rm -f "$ROOT/run/has-session"
     [ $ran -lt 30 ] && fast=$((fast + 1)) || fast=0

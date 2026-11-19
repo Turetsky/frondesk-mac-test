@@ -28,7 +28,10 @@ keychain() {
   for c in DeveloperIDG2CA AppleWWDRCAG3; do
     curl -fsSL -o "/tmp/$c.cer" "https://www.apple.com/certificateauthority/$c.cer"
     security import "/tmp/$c.cer" -k "$KC"
+    # 11-19: in the build keychain alone the chain still came up MissingIntermediate → System keychain too
+    sudo security add-certificates -k /Library/Keychains/System.keychain "/tmp/$c.cer" || true
   done
+  security find-certificate -a -c "Developer ID Certification Authority" -Z "$KC" | grep -E 'SHA-256|"labl"' || true
   # 11-19: on the Codemagic image the chain stopped building (verify-cert: MissingIntermediate though G2 imports
   # fine and matches the leaf AKI → codesign errSecInternalComponent). Print why, so a failure explains itself.
   for n in "$APP_SIGN" "$PKG_SIGN"; do
