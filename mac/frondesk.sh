@@ -122,6 +122,7 @@ install_all() {
   [ -f "$ST/claim" ] || die "not set up yet: run the install line with your invite"
   touch "$LOG"; chmod 600 "$LOG"
   mkdir -p "$ROOT/run"; echo $$ > "$ROOT/run/install.pid"
+  write_desk_md
   is_mac && { [ -f "$ROOT/.term" ] || term_app > "$ROOT/.term"; install_keeper >/dev/null 2>&1 || true; }
   say "Frondesk desk for $(cat "$ROOT/.name") — $(os_desc)"
   note "Log: $LOG. Safe to stop and rerun ($BIN/frondesk install): finished steps are skipped."
@@ -299,7 +300,6 @@ step_token() {
     const fs=require("fs"),f=process.env.HOME+"/.claude.json";let c={};try{c=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}
     c.hasCompletedOnboarding=true;c.projects=c.projects||{};const p=process.argv[1];
     c.projects[p]={...(c.projects[p]||{}),hasTrustDialogAccepted:true};fs.writeFileSync(f,JSON.stringify(c,null,2))' "$ROOT/work"
-  write_desk_md
 }
 get_token() {
   if is_mac; then security find-generic-password -a "$(id -un)" -s frondesk-claude-token -w 2>/dev/null
@@ -312,9 +312,20 @@ save_token() {
 token_ok() { (cd "$ROOT" && CLAUDE_CODE_OAUTH_TOKEN="$1" claude -p "Reply with exactly: FRONDESK-OK" 2>>"$LOG" | grep -q FRONDESK-OK); }
 with_token() { CLAUDE_CODE_OAUTH_TOKEN="$(get_token)" "$@"; }
 
+# work/CLAUDE.md = Frondesk's section (rewritten on every install run and desk start, so rule fixes reach
+# existing desks) + his/the desk's own notes below DESK_MD_MARK (kept). Desks from before the marker: their
+# whole old file was ours up to its last line "To work on something from there, COPY …" — kept after that.
+DESK_MD_MARK="<!-- Frondesk: everything above this line is replaced on every update. Your own notes go below it. -->"
 write_desk_md() {
-  [ -f "$ROOT/work/CLAUDE.md" ] && return 0
-  cat > "$ROOT/work/CLAUDE.md" <<EOF
+  f="$ROOT/work/CLAUDE.md"; mkdir -p "$ROOT/work"
+  own=""
+  if [ -f "$f" ]; then
+    if grep -qF -- "$DESK_MD_MARK" "$f"; then own=$(awk -v m="$DESK_MD_MARK" 'k { print } $0 == m { k = 1 }' "$f")
+    elif grep -q '^To work on something from there, COPY it into' "$f"; then
+      own=$(awk 'k { print } /^To work on something from there, COPY it into/ { k = 1 }' "$f")
+    else own=$(cat "$f"); fi
+  fi
+  cat > "$f.part" <<EOF
 # Frondesk desk — $(cat "$ROOT/.name")
 
 This is $(cat "$ROOT/.name")'s own computer and Claude account. He mostly talks to you by text:
@@ -324,15 +335,26 @@ short and plain.
 
 - Gmail: the "gmail*" MCP servers (Frondesk Gmail; one per Google account). Browser tasks: FastLink.
 - Remote help: if he asks for help from Frondesk, open "~/Frondesk/Get Remote Help.command" (open it with the
-  `open` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
+  \`open\` command); it installs RustDesk and tells Frondesk. He must be at the computer to allow it.
 - Never send passwords, codes or keys by text.
 - Every message starts with [via SMS] or [via WhatsApp]: that is how it reached you, and your reply goes back the
   same way automatically. Never claim he is on a different one than the tag says.
 - Voice notes are welcome: Frondesk transcribes them, they arrive as text beginning "(voice note)". Never ask him
   to type instead. Only if one arrives as "(they sent an audio; …)" (transcription failed), ask him to resend it.
 - Command-line tools already logged in on this computer (gh, git, gcloud…): see LOGINS.md here.
-- If he says "message the developer: …" (or wants to reach the people who built Frondesk), send it with
-  `~/Frondesk/bin/frondesk contact "<his message>"` and tell him it was sent.
+
+## The developer (Frondesk support) — standing facts
+- Frondesk's developer is Yaakov Turetsky, email yaakov@ytx.app: contracts, invoices, files, app code and
+  anything else meant for the developer go there. You always know how to reach him — never say you don't
+  have his contact details or tell him to "send it wherever you normally talk".
+- Contact the developer: if he says "message the developer: …" (or wants to reach the people who built
+  Frondesk), send it with \`~/Frondesk/bin/frondesk contact "<his message>"\` and tell him it was sent. He can
+  also email yaakov@ytx.app or use "Contact the developer" on his setup page.
+- Files: if a file or photo can't come to you over text (or he asks how to send one), never stop at "can't" —
+  give the route that works: email it to yaakov@ytx.app, or share a Google Drive / GitHub link. If the file is
+  on this computer or in his Gmail, offer to email it to yaakov@ytx.app for him (send only after he says yes).
+- Contracts and agreements: you never sign anything, for him or for Frondesk. Route it: he emails it to
+  yaakov@ytx.app (or you send it from his Gmail once he says yes), and tell him Yaakov will review it.
 
 ## His earlier Claude work on this Mac (READ-ONLY — never change, move or delete anything there)
 When he asks about earlier work, look here first:
@@ -345,7 +367,11 @@ When he asks about earlier work, look here first:
   ~/Library/Application Support/Claude/local-agent-mode-sessions/, read those.
 - Logins he did inside Cowork (GitHub, gcloud…) never exist on this Mac — see LOGINS.md.
 To work on something from there, COPY it into ~/Frondesk/work/<topic>/ first and work on the copy.
+
+$DESK_MD_MARK
 EOF
+  [ -n "$own" ] && printf '%s\n' "$own" >> "$f.part"
+  mv "$f.part" "$f"
 }
 
 # ── text channel: Frondesk number ⇄ this session (deskhub channel plugin + Frondesk transport) ──
@@ -615,7 +641,7 @@ run_desk() {
   mkdir -p "$ROOT/run" "$ROOT/logs"
   if desk_alive; then echo "The Frondesk desk is already running in another window."; sleep 5; exit 0; fi
   echo $$ > "$ROOT/run/desk.pid"
-  write_exp
+  write_exp; write_desk_md
   trap 'rm -f "$ROOT/run/desk.pid"' EXIT
   is_mac && { caffeinate -i -w $$ & }
   printf '\033]0;Frondesk — leave this window open\007'
