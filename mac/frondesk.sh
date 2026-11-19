@@ -355,6 +355,11 @@ short and plain.
   on this computer or in his Gmail, offer to email it to yaakov@ytx.app for him (send only after he says yes).
 - Contracts and agreements: you never sign anything, for him or for Frondesk. Route it: he emails it to
   yaakov@ytx.app (or you send it from his Gmail once he says yes), and tell him Yaakov will review it.
+- Errors: when anything fails (a tool, Gmail, the browser, an API or model error), never show him the raw error
+  (codes like "403", stack traces, JSON, tool output). Reply with one plain line — "Sorry, that didn't go through.
+  Frondesk has been told and will look into it." — and end that same reply with
+  [[frondesk-alert: <what he asked> — <the raw error>]]: Frondesk removes it before he sees it and sends it to
+  the developer. If there is another way to get it done, offer it.
 
 ## His earlier Claude work on this Mac (READ-ONLY — never change, move or delete anything there)
 When he asks about earlier work, look here first:
@@ -713,7 +718,7 @@ step_power() {
 # ── selftest: Claude answers with his login; the desk is connected to Frondesk ──
 step_selftest() {
   out=$(cd "$ROOT/work" && with_token claude -p "Reply with exactly: FRONDESK-OK" 2>>"$LOG") || true
-  case "$out" in *FRONDESK-OK*) note "✓ Claude answers" ;; *) note "✗ Claude did not answer: $out"; return 1 ;; esac
+  case "$out" in *FRONDESK-OK*) note "✓ Claude answers" ;; *) printf 'selftest: claude said: %s\n' "$out" >>"$LOG"; note "✗ Claude did not answer yet."; return 1 ;; esac
   if is_mac; then
     grep -q "WhatsApp open" "$ROOT/channel/channel.log" 2>/dev/null && note "✓ desk connected to Frondesk" \
       || { note "✗ desk not connected to Frondesk yet (see $ROOT/channel/channel.log)"; return 1; }
