@@ -23,14 +23,14 @@ keychain() {
     rm -f /tmp/$t.p12
   done
   security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$KC" >/dev/null
-  # the Developer ID G2 intermediate isn't on the build image; without it neither identity is valid
-  curl -fsSL -o /tmp/DeveloperIDG2CA.cer https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
-  security import /tmp/DeveloperIDG2CA.cer -k "$KC"
-  # 11-19: the chain stopped building on the image (CSSMERR_TP_NOT_TRUSTED, codesign errSecInternalComponent):
-  # bring Apple's root too, and print why a chain fails so the next failure explains itself
-  curl -fsSL -o /tmp/AppleRootCA.cer https://www.apple.com/appleca/AppleIncRootCertificate.cer
-  security import /tmp/AppleRootCA.cer -k "$KC" || true
-  date -u
+  # Apple's intermediates aren't reliably on the build image (Developer ID G2 + WWDR G3); without them neither
+  # identity is valid
+  for c in DeveloperIDG2CA AppleWWDRCAG3; do
+    curl -fsSL -o "/tmp/$c.cer" "https://www.apple.com/certificateauthority/$c.cer"
+    security import "/tmp/$c.cer" -k "$KC"
+  done
+  # 11-19: on the Codemagic image the chain stopped building (verify-cert: MissingIntermediate though G2 imports
+  # fine and matches the leaf AKI → codesign errSecInternalComponent). Print why, so a failure explains itself.
   for n in "$APP_SIGN" "$PKG_SIGN"; do
     security find-certificate -c "$n" -p "$KC" > /tmp/leaf.pem
     security verify-cert -c /tmp/leaf.pem -k "$KC" -v || true
