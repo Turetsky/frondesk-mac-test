@@ -118,6 +118,9 @@ bootstrap() {
       printf '%s\n' "$out" | sed -n 3p > "$ROOT/.name"
       printf '%s\n' "$out" | sed -n 4p > "$ROOT/.setup_url")
     touch "$ST/claim"
+  else
+    # install line re-run on a set-up desk (fdinv_update): bring CLAUDE.md + channel transport up to this engine too
+    "$BIN/frondesk" refresh || true
   fi
   exec "$BIN/frondesk" install
 }
@@ -163,6 +166,7 @@ install_all() {
   fi
   if [ -z "$left" ]; then NOW_TITLE="Your computer is ready"; GUIDE="Text the Frondesk number from $(cat "$ROOT/.phone") — your computer answers."
   else NOW_TITLE="Almost done"; GUIDE="Still to do:$left. Frondesk will help you finish."; fi
+  is_mac && [ -f "$ST/.desk_on" ] && keep >/dev/null 2>&1   # opens the desk now if it is not running
   say "$NOW_TITLE. $GUIDE"; progress
   report install "$([ -z "$left" ] && echo COMPLETE || echo "INCOMPLETE:$left")" "$(doctor 2>&1 | tail -n 15)"
 }
@@ -627,7 +631,15 @@ write_command() {
   printf '#!/bin/sh\nexec "%s" help\n' "$BIN/frondesk" > "$ROOT/Get Remote Help.command"; chmod 755 "$ROOT/Get Remote Help.command"
   printf '#!/bin/sh\nexec "%s" contact\n' "$BIN/frondesk" > "$ROOT/Contact the Developer.command"; chmod 755 "$ROOT/Contact the Developer.command"
 }
-desk_alive() { p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+# the desk runs = desk.pid is a live `frondesk run`. A bare kill -0 is not enough: the pid file survives a restart and
+# after boot that pid can belong to anything, so the keeper never reopened the desk (Zimmerman, 11-19 → 11-23).
+desk_alive() {
+  p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && [ -n "$p" ] || return 1
+  case "$(ps -p "$p" -o command= 2>/dev/null)" in *"frondesk run"*) return 0 ;; esac
+  rm -f "$ROOT/run/desk.pid"; return 1
+}
+# the transport touches run/channel.alive on every sign of life from Frondesk (pong every 25 s)
+channel_up() { [ -n "$(find "$ROOT/run/channel.alive" -mmin -3 2>/dev/null)" ]; }
 
 # admin command waiting for this desk? (GET /desk/cmd, taken once) — from the keeper, every 60 s
 check_cmd() {
@@ -650,6 +662,8 @@ self_update() {
 refresh() {
   mkdir -p "$ROOT/run"
   write_desk_md
+  bundle frondesk-transport.mjs "$ROOT/lib/frondesk-transport.mjs.part" && mv "$ROOT/lib/frondesk-transport.mjs.part" "$ROOT/lib/frondesk-transport.mjs" \
+    || { rm -f "$ROOT/lib/frondesk-transport.mjs.part"; report update FAIL "channel transport download failed; kept the old one"; }
   is_mac && write_command
   if desk_alive; then touch "$ROOT/run/reexec"; pkill -f "expect -f $BIN/desk.exp" 2>/dev/null; how="desk restarting"
   else how="desk not running (starts on the new engine)"; fi
@@ -657,19 +671,26 @@ refresh() {
   echo "Frondesk updated: $how."
 }
 
-# frondesk keep (LaunchAgent, every 60 s): admin command, then open the desk window unless it runs
+# frondesk keep (LaunchAgent, every 60 s): admin command, then open the desk window unless it runs;
+# a desk whose channel has been silent > 5 min (claude up > 5 min) is restarted in its window
 keep() {
   check_cmd
-  [ -f "$ROOT/.paused" ] && exit 0
+  [ -f "$ROOT/.paused" ] && return 0
   [ -f "$ST/keeper" ] && [ ! -f "$ST/.desk_on" ] && touch "$ST/.desk_on"   # installs from before the early keeper
   app=$(cat "$ROOT/.term" 2>/dev/null || echo Terminal)
   if [ ! -f "$ST/.desk_on" ]; then
     # setup not finished: reopen it if its Terminal was closed (finished steps are skipped)
-    p=$(cat "$ROOT/run/install.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && exit 0
+    p=$(cat "$ROOT/run/install.pid" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null && return 0
     printf '%s keeper: setup not running, reopening it\n' "$(date '+%F %T')"
-    open -a "$app" "$BIN/Setup.command"; exit 0
+    open -a "$app" "$BIN/Setup.command"; return 0
   fi
-  desk_alive && exit 0
+  if desk_alive; then
+    if [ -n "$(find "$ROOT/run/claude.start" -mmin +5 2>/dev/null)" ] && [ -z "$(find "$ROOT/run/channel.alive" -mmin -5 2>/dev/null)" ]; then
+      printf '%s keeper: desk channel silent > 5 min, restarting claude\n' "$(date '+%F %T')"
+      pkill -f "expect -f $BIN/desk.exp" 2>/dev/null
+    fi
+    return 0
+  fi
   printf '%s keeper: desk not running, opening it\n' "$(date '+%F %T')"
   open -a "$app" "$BIN/Frondesk.command"
 }
@@ -690,10 +711,11 @@ run_desk() {
     cont=""; [ -f "$ROOT/run/has-session" ] && cont=--continue
     chans=""; tools=mcp__plugin_whatsapp_whatsapp__reply
     [ -f "$ST/messages" ] && is_mac && { chans="--channels plugin:imessage@claude-plugins-official"; tools="$tools,mcp__plugin_imessage_imessage__reply"; }
+    touch "$ROOT/run/claude.start"
     (cd "$ROOT/work" && \
       CLAUDE_CODE_OAUTH_TOKEN="$(get_token)" PATH="$HOME/.bun/bin:$PATH" DISABLE_AUTOUPDATER=1 \
       WHATSAPP_CHANNEL=1 WHATSAPP_STATE_DIR="$ROOT/channel" WHATSAPP_TRANSPORT="$ROOT/lib/frondesk-transport.mjs" \
-      FRONDESK_URL="$FD_URL" FRONDESK_KEY_FILE="$ROOT/.desk.key" \
+      FRONDESK_URL="$FD_URL" FRONDESK_KEY_FILE="$ROOT/.desk.key" FRONDESK_ALIVE_FILE="$ROOT/run/channel.alive" \
       expect -f "$BIN/desk.exp" claude $cont $chans --dangerously-load-development-channels "$CHAN_FLAG" \
         --allowedTools "$tools" --append-system-prompt "$DESK_PROMPT")
     ran=$(( $(date +%s) - t0 ))
@@ -736,7 +758,7 @@ doctor() {
   printf '  claude: %s\n' "$(claude --version 2>/dev/null || echo missing)"
   printf '  claude key: %s\n' "$(t=$(get_token) && [ -n "$t" ] && token_ok "$t" && echo works || echo MISSING/BROKEN)"
   printf '  desk running: %s\n' "$(desk_alive && echo yes || echo NO)"
-  printf '  channel log: %s\n' "$(tail -n 1 "$ROOT/channel/channel.log" 2>/dev/null | cut -c1-100)"
+  printf '  channel: %s\n' "$(channel_up && echo connected || echo "NOT connected · log: $(tail -n 1 "$ROOT/channel/channel.log" 2>/dev/null | cut -c1-100)")"
   is_mac && printf '  keeper: %s\n' "$(launchctl print "gui/$(id -u)/ai.frondesk.keeper" >/dev/null 2>&1 && echo loaded || echo NOT loaded)"
   is_mac && printf '  remote help: %s\n' "$([ -d /Applications/RustDesk.app ] && echo RustDesk || echo NONE)"
 }
@@ -755,7 +777,8 @@ step_selftest() {
   out=$(cd "$ROOT/work" && with_token claude -p "Reply with exactly: FRONDESK-OK" 2>>"$LOG") || true
   case "$out" in *FRONDESK-OK*) note "✓ Claude answers" ;; *) printf 'selftest: claude said: %s\n' "$out" >>"$LOG"; note "✗ Claude did not answer yet."; return 1 ;; esac
   if is_mac; then
-    grep -q "WhatsApp open" "$ROOT/channel/channel.log" 2>/dev/null && note "✓ desk connected to Frondesk" \
+    i=0; while [ $i -lt 30 ] && ! channel_up; do sleep 2; i=$((i + 1)); done
+    channel_up && note "✓ desk connected to Frondesk" \
       || { note "✗ desk not connected to Frondesk yet (see $ROOT/channel/channel.log)"; return 1; }
   fi
   note "Now text 'hi' to the Frondesk number from $(cat "$ROOT/.phone") (WhatsApp or SMS), or text yourself in Messages — the answer comes from this computer."
@@ -765,7 +788,7 @@ uninstall() {
   printf '   Remove Frondesk from this computer (desk, channel, FastLink pairing, keeper, Claude key)? (y/N) ' >/dev/tty; IFS= read -r REPLY </dev/tty || REPLY=""
   case "$REPLY" in y*|Y*) ;; *) exit 0 ;; esac
   if is_mac; then launchctl bootout "gui/$(id -u)/ai.frondesk.keeper" >/dev/null 2>&1; rm -f "$HOME/Library/LaunchAgents/ai.frondesk.keeper.plist"; fi
-  p=$(cat "$ROOT/run/desk.pid" 2>/dev/null) && kill "$p" 2>/dev/null
+  desk_alive && kill "$(cat "$ROOT/run/desk.pid")" 2>/dev/null
   [ -f "$ROOT/fastlink/server/index.js" ] && node "$ROOT/fastlink/server/index.js" unpair >/dev/null 2>&1
   claude mcp remove -s user fastlink >/dev/null 2>&1
   claude plugin uninstall whatsapp@claude-whatsapp >/dev/null 2>&1

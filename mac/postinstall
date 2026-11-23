@@ -23,5 +23,18 @@ sudo -u "$user" sh -c 'umask 077; mkdir -p "$1/Frondesk" && cat > "$1/Frondesk/s
 if [ -f "\$HOME/Frondesk/.state/claim" ] && [ -x "\$HOME/Frondesk/bin/frondesk" ]; then exec "\$HOME/Frondesk/bin/frondesk" install; fi
 FRONDESK_ENGINE="$APP/Contents/Resources/frondesk" exec /bin/sh "$APP/Contents/Resources/frondesk" $inv
 EOF
+# already set up on this Mac (installer run again to update): this pkg's engine replaces the installed one ONCE
+# (bootstrap: copy, refresh = CLAUDE.md + channel transport + desk restart, then install = desk opens) — same as the
+# `fdinv_update` install line. start.command (app opened later) keeps running the installed engine, which may be newer.
+if [ -f "$home/Frondesk/.state/claim" ]; then
+  sudo -u "$user" sh -c 'umask 077; cat > "$1/Frondesk/update.command" && chmod 700 "$1/Frondesk/update.command"' sh "$home" <<UPD
+#!/bin/sh
+# Frondesk update (written by the Frondesk installer)
+rm -f "\$HOME/Frondesk/update.command"
+FRONDESK_ENGINE="$APP/Contents/Resources/frondesk" exec /bin/sh "$APP/Contents/Resources/frondesk" fdinv_update
+UPD
+  as_user open -a Terminal "$home/Frondesk/update.command"
+  exit 0
+fi
 as_user open -a Terminal "$home/Frondesk/start.command"
 exit 0
